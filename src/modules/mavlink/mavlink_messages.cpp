@@ -39,9 +39,6 @@
  * @author Anton Babushkin <anton.babushkin@me.com>
  */
 
-#include <stdio.h>
-#include <errno.h>
-
 #include "mavlink_main.h"
 #include "mavlink_messages.h"
 #include "mavlink_command_sender.h"
@@ -100,23 +97,8 @@
 #include <uORB/topics/sensor_gyro.h>
 #include <uORB/uORB.h>
 
-
-static uint16_t cm_uint16_from_m_float(float m);
 static void get_mavlink_mode_state(struct vehicle_status_s *status, uint8_t *mavlink_state,
 				   uint8_t *mavlink_base_mode, uint32_t *mavlink_custom_mode);
-
-uint16_t
-cm_uint16_from_m_float(float m)
-{
-	if (m < 0.0f) {
-		return 0;
-
-	} else if (m > 655.35f) {
-		return 65535;
-	}
-
-	return (uint16_t)(m * 100.0f);
-}
 
 void get_mavlink_mode_state(struct vehicle_status_s *status, uint8_t *mavlink_state,
 			    uint8_t *mavlink_base_mode, uint32_t *mavlink_custom_mode)
@@ -272,7 +254,6 @@ void get_mavlink_mode_state(struct vehicle_status_s *status, uint8_t *mavlink_st
 		*mavlink_state = MAV_STATE_CRITICAL;
 	}
 }
-
 
 class MavlinkStreamHeartbeat : public MavlinkStream
 {
@@ -1166,9 +1147,9 @@ protected:
 			msg.v_acc = gps.epv * 1e3f;
 			msg.vel_acc = gps.s_variance_m_s * 1e3f;
 			msg.hdg_acc = gps.c_variance_rad * 1e5f / M_DEG_TO_RAD_F;
-			msg.vel = cm_uint16_from_m_float(gps.vel_m_s),
-			    msg.cog = _wrap_2pi(gps.cog_rad) * M_RAD_TO_DEG_F * 1e2f,
-				msg.satellites_visible = gps.satellites_used;
+			msg.vel = math::constrain(gps.vel_m_s * 100.0f, 0.0f, 65535.0f);
+			msg.cog = _wrap_2pi(gps.cog_rad) * M_RAD_TO_DEG_F * 1e2f;
+			msg.satellites_visible = gps.satellites_used;
 
 			mavlink_msg_gps_raw_int_send_struct(_mavlink->get_channel(), &msg);
 
@@ -2938,8 +2919,8 @@ protected:
 
 		if (_att_sp_sub->update(&_att_sp_time, &att_sp)) {
 
-			struct vehicle_rates_setpoint_s att_rates_sp = {};
-			(void)_att_rates_sp_sub->update(&_att_rates_sp_time, &att_rates_sp);
+			vehicle_rates_setpoint_s att_rates_sp = {};
+			_att_rates_sp_sub->update(&_att_rates_sp_time, &att_rates_sp);
 
 			mavlink_attitude_target_t msg = {};
 

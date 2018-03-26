@@ -44,87 +44,69 @@
 #include "mavlink_stream.h"
 #include "mavlink_main.h"
 
-MavlinkStream::MavlinkStream(Mavlink *mavlink) :
-	next(nullptr),
-	_mavlink(mavlink),
-	_interval(1000000),
-	_last_sent(0 /* 0 means unlimited - updates on every iteration */)
+MavlinkStream::MavlinkStream(Mavlink *mavlink) : _mavlink(mavlink)
 {
-}
-
-MavlinkStream::~MavlinkStream()
-{
+	_last_sent = hrt_absolute_time();
 }
 
 /**
  * Set messages interval in ms
  */
 void
-MavlinkStream::set_interval(const int interval)
+MavlinkStream::set_interval(const uint32_t interval)
 {
-	_interval = interval;
+	if (interval != _interval) {
+		_mavlink->set_update_total_stream_rate();
+		_interval = interval;
+	}
 }
 
 /**
  * Update subscriptions and send message if necessary
  */
 int
-MavlinkStream::update(const hrt_abstime t)
+MavlinkStream::update(const float scale)
 {
-	// If the message has never been sent before we want
-	// to send it immediately and can return right away
-	if (_last_sent == 0) {
-		// this will give different messages on the same run a different
-		// initial timestamp which will help spacing them out
-		// on the link scheduling
-		_last_sent = hrt_absolute_time();
-#ifndef __PX4_QURT
-		(void)send(t);
-#endif
-		return 0;
-	}
+	const hrt_abstime now = hrt_absolute_time();
 
 	// One of the previous iterations sent the update
 	// already before the deadline
-	if (_last_sent > t) {
-		return -1;
+	if (_last_sent >= now) {
+		return 0;
 	}
 
-	int64_t dt = t - _last_sent;
-	int interval = (_interval > 0) ? _interval : 0;
+	int32_t interval = _interval;
 
 	if (!const_rate()) {
-		interval /= _mavlink->get_rate_mult();
+		interval = static_cast<float>(interval) * scale;
 	}
 
-	// Send the message if it is due or
-	// if it will overrun the next scheduled send interval
-	// by 30% of the interval time. This helps to avoid
-	// sending a scheduled message on average slower than
-	// scheduled. Doing this at 50% would risk sending
-	// the message too often as the loop runtime of the app
-	// needs to be accounted for as well.
-	// This method is not theoretically optimal but a suitable
-	// stopgap as it hits its deadlines well (0.5 Hz, 50 Hz and 250 Hz)
+#ifndef __PX4_QURT // TODO: QuRT hack still needed?
 
-	if (interval == 0 || (dt > (interval - (_mavlink->get_main_loop_delay() / 10) * 3))) {
+	const int32_t dt = now - _last_sent;
+
+	if ((dt >= interval) || (interval == 0)) {
 		// interval expired, send message
-		bool sent = true;
-#ifndef __PX4_QURT
-		sent = send(t);
-#endif
+
+
 
 		// If the interval is non-zero do not use the actual time but
 		// increment at a fixed rate, so that processing delays do not
 		// distort the average rate
-		if (sent) {
-			_last_sent = (interval > 0) ? _last_sent + interval : t;
-			return 0;
+		if (send(now)) {
+			if (interval > 0) {
+				_last_sent = _last_sent + interval;
 
-		} else {
-			return -1;
+			} else {
+				_last_sent = now;
+			}
+
+			// return the next required update time to hit the interval
+			return _last_sent + interval;
 		}
 	}
 
-	return -1;
+#endif /* __PX4_QURT */
+
+	return 0;
 }
